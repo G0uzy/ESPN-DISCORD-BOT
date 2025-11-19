@@ -4,16 +4,14 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from espn_client import connect_to_league
 
-# Load environment variables
 load_dotenv()
 
-# Configuration
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 LEAGUE_ID = int(os.getenv('LEAGUE_ID', '0'))
 YEAR = int(os.getenv('YEAR', '2024'))
 ESPN_S2 = os.getenv('ESPN_S2')
 SWID = os.getenv('SWID')
-GUILD_ID = os.getenv('GUILD_ID') # Optional: For instant command sync in a specific server
+GUILD_ID = os.getenv('GUILD_ID')
 
 class FantasyBot(discord.Client):
     def __init__(self):
@@ -43,9 +41,6 @@ async def league_info(interaction: discord.Interaction):
         return
 
     try:
-        # Note: connect_to_league is synchronous. For a production bot, 
-        # this should be run in an executor to avoid blocking the event loop.
-        # For this simple example, we call it directly.
         league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
         
         if league:
@@ -79,12 +74,9 @@ async def standings(interaction: discord.Interaction):
             await interaction.followup.send("Could not connect to league.")
             return
 
-        # Sort teams by standing if not already sorted (espn_api usually returns them sorted or has a standings method)
-        # Using league.standings() if available, otherwise sorting league.teams
         if hasattr(league, 'standings'):
             teams = league.standings()
         else:
-            # Fallback sort by wins, then points for
             teams = sorted(league.teams, key=lambda x: (x.wins, x.points_for), reverse=True)
 
         embed = discord.Embed(title=f"Standings - {league.settings.name}", color=discord.Color.gold())
@@ -121,7 +113,6 @@ async def matchups(interaction: discord.Interaction):
             home_team = matchup.home_team
             home_score = matchup.home_score
             
-            # Away team might be None (bye week?) but usually in fantasy it's head-to-head
             away_team = matchup.away_team
             away_score = matchup.away_score
             
@@ -148,7 +139,6 @@ async def team_info(interaction: discord.Interaction, team_name: str):
             await interaction.followup.send("Could not connect to league.")
             return
 
-        # Find team (case-insensitive partial match)
         found_team = None
         for team in league.teams:
             if team_name.lower() in team.team_name.lower():
@@ -161,7 +151,7 @@ async def team_info(interaction: discord.Interaction, team_name: str):
             embed.add_field(name="Standing", value=f"Rank: {found_team.standing}", inline=True)
             embed.add_field(name="Points", value=f"For: {found_team.points_for}\nAgainst: {found_team.points_against}", inline=False)
             
-            roster = "\n".join([f"{p.name} ({p.position})" for p in found_team.roster[:15]]) # Limit to 15 to avoid limit
+            roster = "\n".join([f"{p.name} ({p.position})" for p in found_team.roster[:15]])
             if len(found_team.roster) > 15:
                 roster += "\n..."
             
@@ -203,21 +193,16 @@ async def monitor_activity():
         return
 
     try:
-        # We need a fresh league object for the loop
         league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
         if not league:
             return
 
         # Fetch recent activity
-        # Note: espn_api recent_activity() returns a list of Activity objects
         activities = league.recent_activity()
         
         # Filter for new activities
-        # This is a simplified check. In production, you'd want a more robust way to track seen activities.
-        # Here we assume activities are sorted new to old.
         new_activities = []
         if last_activity_date == 0:
-             # First run, just mark the latest date
              if activities:
                  last_activity_date = activities[0].date
         else:
@@ -225,14 +210,14 @@ async def monitor_activity():
                 if activity.date > last_activity_date:
                     new_activities.append(activity)
                 else:
-                    break # Reached seen activities
+                    break
             
             if new_activities:
                 last_activity_date = new_activities[0].date
                 
                 channel = client.get_channel(notification_channel_id)
                 if channel:
-                    for act in reversed(new_activities): # Send oldest to newest
+                    for act in reversed(new_activities):
                         embed = discord.Embed(title="League Activity", description=str(act), color=discord.Color.orange())
                         await channel.send(embed=embed)
 
@@ -260,11 +245,15 @@ async def monitor_scores():
                 prev_score = last_scores.get(matchup.home_team.team_id, 0)
                 current_score = matchup.home_score
                 
-                # If score increased by 6 or more, likely a TD (or two FGs)
                 if current_score >= prev_score + 6:
                     channel = client.get_channel(notification_channel_id)
                     if channel:
-                        await channel.send(f"🏈 **TOUCHDOWN ALERT** 🏈\n**{matchup.home_team.team_name}** just scored! New Score: {current_score}")
+                        await channel.send(f"🏈 **TOUCHDOWN ALERT** 🏈\n**{matchup.home_team.team_name}** just scored! New Score: {current_score}\n {matchup.home_team.team_name} now has a projected score of {matchup.projected_score}")
+
+                elif current_score >= prev_score + 3:
+                    channel = client.get_channel(notification_channel_id)
+                    if channel:
+                        await channel.send(f"🏈 **FIELD GOAL ALERT** 🏈\n**{matchup.home_team.team_name}** just scored! New Score: {current_score}\n {matchup.home_team.team_name} now has a projected score of {matchup.projected_score}")
                 
                 last_scores[matchup.home_team.team_id] = current_score
 
@@ -276,10 +265,15 @@ async def monitor_scores():
                 if current_score >= prev_score + 6:
                     channel = client.get_channel(notification_channel_id)
                     if channel:
-                        await channel.send(f"🏈 **TOUCHDOWN ALERT** 🏈\n**{matchup.away_team.team_name}** just scored! New Score: {current_score}")
+                        await channel.send(f"🏈 **TOUCHDOWN ALERT** 🏈\n**{matchup.away_team.team_name}** just scored! New Score: {current_score}\n {matchup.away_team.team_name} now has a projected score of {matchup.projected_score}")
+                
+                elif current_score >= prev_score + 3:
+                    channel = client.get_channel(notification_channel_id)
+                    if channel:
+                        await channel.send(f"🏈 **FIELD GOAL ALERT** 🏈\n**{matchup.away_team.team_name}** just scored! New Score: {current_score}\n {matchup.away_team.team_name} now has a projected score of {matchup.projected_score}")
                 
                 last_scores[matchup.away_team.team_id] = current_score
-
+            
     except Exception as e:
         print(f"Error in monitor_scores: {e}")
 
