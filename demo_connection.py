@@ -1,10 +1,15 @@
 from espn_client import connect_to_league
 
-# PLACEHOLDER CREDENTIALS - PLEASE REPLACE WITH YOUR ACTUAL DATA
-LEAGUE_ID = 12345678  # Replace with your League ID (int)
-YEAR = 2024           # Replace with the current year (int)
-ESPN_S2 = 'PLACEHOLDER' # Replace with your espn_s2 cookie string
-SWID = 'PLACEHOLDER'    # Replace with your swid cookie string
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+LEAGUE_ID = int(os.getenv('LEAGUE_ID', '0'))
+YEAR = int(os.getenv('YEAR', '2024'))
+ESPN_S2 = os.getenv('ESPN_S2')
+SWID = os.getenv('SWID')
 
 def main():
     print("Attempting to connect to ESPN League...")
