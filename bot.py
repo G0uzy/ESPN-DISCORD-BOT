@@ -13,6 +13,7 @@ LEAGUE_ID = int(os.getenv('LEAGUE_ID', '0'))
 YEAR = int(os.getenv('YEAR', '2024'))
 ESPN_S2 = os.getenv('ESPN_S2')
 SWID = os.getenv('SWID')
+GUILD_ID = os.getenv('GUILD_ID') # Optional: For instant command sync in a specific server
 
 class FantasyBot(discord.Client):
     def __init__(self):
@@ -21,7 +22,14 @@ class FantasyBot(discord.Client):
         self.tree = discord.app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        await self.tree.sync()
+        if GUILD_ID:
+            guild = discord.Object(id=GUILD_ID)
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            print(f"Synced commands to guild {GUILD_ID}")
+        else:
+            await self.tree.sync()
+            print("Synced commands globally (may take up to an hour)")
 
 client = FantasyBot()
 
