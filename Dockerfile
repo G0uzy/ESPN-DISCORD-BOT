@@ -4,6 +4,6 @@ WORKDIR /app
 
 COPY . /app
 
-RUN pip install --no-cache-dir discord.py espn-api python-dotenv requests
+RUN pip install --no-cache-dir discord.py espn-api matplotlib python-dotenv requests
 
 CMD ["python", "bot.py"]
