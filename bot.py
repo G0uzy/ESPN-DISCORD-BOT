@@ -3,6 +3,10 @@ import os
 from discord.ext import commands
 from dotenv import load_dotenv
 from espn_client import connect_to_league
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from io import BytesIO
 
 load_dotenv()
 
@@ -165,6 +169,195 @@ async def team_info(interaction: discord.Interaction, team_name: str):
 
     except Exception as e:
         await interaction.followup.send(f"Error fetching team info: {str(e)}")
+        
+@client.tree.command(name="matchup_details", description="Show projections vs actual scores and impact on standings")
+async def matchup_details(interaction: discord.Interaction):
+    """Displays detailed matchup info, projections, and a graph of performance vs projection."""
+    await interaction.response.defer()
+
+    try:
+        league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
+        if not league:
+            await interaction.followup.send("Could not connect to league.")
+            return
+
+        box_scores = league.box_scores()
+        current_week = league.current_week
+
+        # --- Collect data for text + graph ---
+        team_deltas = []    # list of (team_name, delta_actual_minus_proj)
+        matchup_lines = []  # lines for the embed description
+
+        # For projected standings (start from current records)
+        projected_records = {
+            team.team_id: {
+                "team": team,
+                "wins": team.wins,
+                "losses": team.losses,
+                "ties": team.ties,
+            }
+            for team in league.teams
+        }
+
+        for matchup in box_scores:
+            home_team = matchup.home_team
+            away_team = matchup.away_team
+            home_score = matchup.home_score or 0
+            away_score = matchup.away_score or 0
+
+            # Try a few possible projected attributes, fall back gracefully
+            home_proj = getattr(matchup, "home_projected_total", None)
+            if home_proj is None:
+                home_proj = getattr(matchup, "home_projected", None)
+
+            away_proj = getattr(matchup, "away_projected_total", None)
+            if away_proj is None:
+                away_proj = getattr(matchup, "away_projected", None)
+
+            # If we don't have projections at all, keep it simple
+            if home_proj is None:
+                home_proj = home_score
+            if away_proj is None:
+                away_proj = away_score
+
+            # Deltas (Actual - Projected)
+            home_delta = home_score - home_proj
+            away_delta = away_score - away_proj
+
+            team_deltas.append((home_team.team_name, home_delta))
+            if away_team:
+                team_deltas.append((away_team.team_name, away_delta))
+
+            # Who’s favored by projections?
+            if away_team:
+                if home_proj > away_proj:
+                    favored_team = home_team
+                    margin = home_proj - away_proj
+                elif away_proj > home_proj:
+                    favored_team = away_team
+                    margin = away_proj - home_proj
+                else:
+                    favored_team = None
+                    margin = 0
+            else:
+                favored_team = home_team
+                margin = 0
+
+            if favored_team is None:
+                favored_str = "Even (tied projection)"
+            else:
+                favored_str = f"{favored_team.team_name} by {margin:.1f}"
+
+            # Build matchup text block
+            if away_team:
+                block = (
+                    f"**{home_team.team_name}**\n"
+                    f"Actual: {home_score:.2f} | Proj: {home_proj:.2f} | Δ {home_delta:+.2f}\n"
+                    f"vs\n"
+                    f"**{away_team.team_name}**\n"
+                    f"Actual: {away_score:.2f} | Proj: {away_proj:.2f} | Δ {away_delta:+.2f}\n"
+                    f"**Favored:** {favored_str}\n"
+                )
+            else:
+                block = (
+                    f"**{home_team.team_name}** (BYE)\n"
+                    f"Actual: {home_score:.2f} | Proj: {home_proj:.2f} | Δ {home_delta:+.2f}\n"
+                    f"**Favored:** {home_team.team_name}\n"
+                )
+
+            matchup_lines.append(block + "\n")
+
+            # --- Projected standings if favorites win this week ---
+            if away_team:
+                home_id = home_team.team_id
+                away_id = away_team.team_id
+
+                if home_proj > away_proj:
+                    projected_records[home_id]["wins"] += 1
+                    projected_records[away_id]["losses"] += 1
+                elif away_proj > home_proj:
+                    projected_records[away_id]["wins"] += 1
+                    projected_records[home_id]["losses"] += 1
+                else:
+                    projected_records[home_id]["ties"] += 1
+                    projected_records[away_id]["ties"] += 1
+
+        # --- Build projected standings text ---
+        projected_table = []
+        sorted_proj = sorted(
+            projected_records.values(),
+            key=lambda r: (r["wins"], r["team"].points_for),
+            reverse=True,
+        )
+
+        for rank, rec in enumerate(sorted_proj, start=1):
+            t = rec["team"]
+            w, l, ti = rec["wins"], rec["losses"], rec["ties"]
+            curr_w, curr_l, curr_t = t.wins, t.losses, t.ties
+            projected_table.append(
+                f"**{rank}. {t.team_name}**  "
+                f"({curr_w}-{curr_l}-{curr_t} ➜ {w}-{l}-{ti})"
+            )
+
+        # --- Create graph (Actual - Projected) ---
+        if team_deltas:
+            labels = [name for name, _ in team_deltas]
+            deltas = [delta for _, delta in team_deltas]
+
+            fig, ax = plt.subplots(figsize=(10, max(4, len(labels) * 0.4)))
+            y_pos = range(len(labels))
+
+            ax.barh(list(y_pos), deltas)
+            ax.set_yticks(list(y_pos))
+            ax.set_yticklabels(labels)
+            ax.axvline(0, linewidth=0.8)
+            ax.set_xlabel("Actual - Projected Points")
+            ax.set_title(f"Week {current_week} Performance vs Projection")
+
+            plt.tight_layout()
+
+            # Save to bytes buffer
+            buf = BytesIO()
+            plt.savefig(buf, format="png")
+            buf.seek(0)
+            plt.close(fig)
+
+            file = discord.File(buf, filename="matchup_details.png")
+            image_attached = True
+        else:
+            file = None
+            image_attached = False
+
+        # --- Build embed and send ---
+        embed = discord.Embed(
+            title=f"Week {current_week} Matchup Details - {league.settings.name}",
+            color=discord.Color.teal()
+        )
+
+        # Matchup breakdown
+        full_desc = "".join(matchup_lines)
+        if len(full_desc) > 4096:
+            full_desc = full_desc[:4000] + "\n...\n(Truncated)"
+        embed.description = full_desc
+
+        # Projected standings field
+        standings_text = "\n".join(projected_table) if projected_table else "N/A"
+        if len(standings_text) > 1024:
+            standings_text = standings_text[:1000] + "\n...\n(Truncated)"
+        embed.add_field(
+            name="If Favorites Win (Projected Standings After This Week)",
+            value=standings_text,
+            inline=False,
+        )
+
+        if image_attached:
+            embed.set_image(url="attachment://matchup_details.png")
+            await interaction.followup.send(embed=embed, file=file)
+        else:
+            await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        await interaction.followup.send(f"Error fetching matchup details: {str(e)}")
 
 # --- Monitoring System ---
 
