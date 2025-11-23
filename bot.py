@@ -7,6 +7,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from io import BytesIO
+import asyncio
+import functools
+import random
 
 load_dotenv()
 
@@ -33,6 +36,14 @@ class FantasyBot(discord.Client):
             await self.tree.sync()
             print("Synced commands globally (may take up to an hour)")
 
+    async def get_league_async(self):
+        """Runs the blocking connect_to_league in a separate thread."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, 
+            functools.partial(connect_to_league, LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
+        )
+
 client = FantasyBot()
 
 @client.tree.command(name="league_info", description="Get information about the ESPN League")
@@ -45,7 +56,7 @@ async def league_info(interaction: discord.Interaction):
         return
 
     try:
-        league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
+        league = await client.get_league_async()
         
         if league:
             embed = discord.Embed(
@@ -73,7 +84,7 @@ async def standings(interaction: discord.Interaction):
     await interaction.response.defer()
     
     try:
-        league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
+        league = await client.get_league_async()
         if not league:
             await interaction.followup.send("Could not connect to league.")
             return
@@ -102,7 +113,7 @@ async def matchups(interaction: discord.Interaction):
     await interaction.response.defer()
     
     try:
-        league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
+        league = await client.get_league_async()
         if not league:
             await interaction.followup.send("Could not connect to league.")
             return
@@ -138,7 +149,7 @@ async def team_info(interaction: discord.Interaction, team_name: str):
     await interaction.response.defer()
     
     try:
-        league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
+        league = await client.get_league_async()
         if not league:
             await interaction.followup.send("Could not connect to league.")
             return
@@ -176,7 +187,7 @@ async def matchup_details(interaction: discord.Interaction):
     await interaction.response.defer()
 
     try:
-        league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
+        league = await client.get_league_async()
         if not league:
             await interaction.followup.send("Could not connect to league.")
             return
@@ -359,6 +370,44 @@ async def matchup_details(interaction: discord.Interaction):
     except Exception as e:
         await interaction.followup.send(f"Error fetching matchup details: {str(e)}")
 
+@client.tree.command(name="random_player", description="Get a random player from a random team")
+async def random_player(interaction: discord.Interaction):
+    """Fetches a random player from a random team."""
+    await interaction.response.defer()
+    
+    try:
+        league = await client.get_league_async()
+        if not league:
+            await interaction.followup.send("Could not connect to league.")
+            return
+
+        if not league.teams:
+            await interaction.followup.send("No teams found in the league.")
+            return
+
+        random_team = random.choice(league.teams)
+        if not random_team.roster:
+            await interaction.followup.send(f"Team {random_team.team_name} has no players.")
+            return
+            
+        random_player = random.choice(random_team.roster)
+        
+        embed = discord.Embed(title="Random Player Discovery", color=discord.Color.magenta())
+        embed.add_field(name="Player", value=f"**{random_player.name}**", inline=True)
+        embed.add_field(name="Position", value=random_player.position, inline=True)
+        embed.add_field(name="Team", value=random_team.team_name, inline=False)
+        
+        # Some extra flair if available
+        if hasattr(random_player, 'proTeam'):
+             embed.add_field(name="Pro Team", value=random_player.proTeam, inline=True)
+        if hasattr(random_player, 'total_points'):
+             embed.add_field(name="Total Points", value=f"{random_player.total_points:.2f}", inline=True)
+
+        await interaction.followup.send(embed=embed)
+
+    except Exception as e:
+        await interaction.followup.send(f"Error fetching random player: {str(e)}")
+
 # --- Monitoring System ---
 
 from discord.ext import tasks
@@ -386,7 +435,7 @@ async def monitor_activity():
         return
 
     try:
-        league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
+        league = await client.get_league_async()
         if not league:
             return
 
@@ -426,7 +475,7 @@ async def monitor_scores():
         return
 
     try:
-        league = connect_to_league(LEAGUE_ID, YEAR, espn_s2=ESPN_S2, swid=SWID)
+        league = await client.get_league_async()
         if not league:
             return
 
